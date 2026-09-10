@@ -31,14 +31,16 @@ st.set_page_config(
 if os.path.exists("background.png"):
 
     with open("background.png", "rb") as f:
-        background = base64.b64encode(f.read()).decode()
+        background_data = base64.b64encode(
+            f.read()
+        ).decode()
 
     st.markdown(
         f"""
         <style>
         [data-testid="stAppViewContainer"] {{
             background-image: url(
-                "data:image/png;base64,{background}"
+                "data:image/png;base64,{background_data}"
             );
             background-size: cover;
             background-position: center;
@@ -69,7 +71,7 @@ st.markdown(
         font-size: 40px;
         font-weight: 800;
         margin-top: 10px;
-        margin-bottom: 4px;
+        margin-bottom: 5px;
     }
 
     .subtitle {
@@ -78,23 +80,15 @@ st.markdown(
         margin-bottom: 25px;
     }
 
-    .info {
-        background: rgba(255,255,255,0.95);
-        border-radius: 14px;
-        padding: 18px 22px;
+    .instruction {
+        background: rgba(255, 255, 255, 0.95);
         color: #111111;
+        padding: 18px 20px;
+        border-radius: 14px;
+        text-align: center;
+        font-size: 17px;
+        font-weight: 600;
         margin-bottom: 25px;
-    }
-
-    .info-title {
-        font-size: 21px;
-        font-weight: 700;
-        margin-bottom: 10px;
-    }
-
-    .info-line {
-        font-size: 15px;
-        margin: 6px 0;
     }
 
     .camera-title {
@@ -103,15 +97,48 @@ st.markdown(
         margin-bottom: 10px;
     }
 
-    .result {
+    .message {
+        text-align: center;
         background: #000000;
         color: #ffffff;
+        padding: 12px;
+        border-radius: 10px;
+        font-size: 17px;
+        font-weight: 700;
+        margin-top: 10px;
+    }
+
+    .countdown {
         text-align: center;
+        background: #000000;
+        color: #ffffff;
+        padding: 8px;
+        border-radius: 12px;
+        font-size: 42px;
+        font-weight: 900;
+        margin-top: 10px;
+    }
+
+    .processing {
+        text-align: center;
+        background: #000000;
+        color: #ffffff;
+        padding: 13px;
+        border-radius: 10px;
+        font-size: 21px;
+        font-weight: 800;
+        margin-top: 10px;
+    }
+
+    .result {
+        text-align: center;
+        background: #000000;
+        color: #ffffff;
         padding: 15px;
         border-radius: 10px;
-        font-size: 24px;
-        font-weight: 800;
-        margin-top: 15px;
+        font-size: 25px;
+        font-weight: 900;
+        margin-top: 12px;
     }
 
     .warning {
@@ -143,25 +170,13 @@ st.markdown(
 
 
 # ============================================================
-# INFORMATION
+# ONLY INSTRUCTION
 # ============================================================
 
 st.markdown(
     """
-    <div class="info">
-        <div class="info-title">How does it work?</div>
-
-        <div class="info-line">
-            1. Keep your face inside the square.
-        </div>
-
-        <div class="info-line">
-            2. A 10-second countdown starts automatically.
-        </div>
-
-        <div class="info-line">
-            3. At 0, one image is captured and analyzed by AI.
-        </div>
+    <div class="instruction">
+        Click on the Start button and place your face on the square.
     </div>
     """,
     unsafe_allow_html=True
@@ -169,7 +184,7 @@ st.markdown(
 
 
 # ============================================================
-# STATE
+# APPLICATION STATE
 # ============================================================
 
 class AppState:
@@ -181,17 +196,18 @@ class AppState:
         # Latest camera frame
         self.latest_frame = None
 
-        # Current face position
+        # Face
         self.face_box = None
-
-        # Face inside square
         self.face_inside = False
+
+        # Detection
+        self.frame_count = 0
 
         # Countdown
         self.countdown_started = False
         self.countdown_start_time = None
 
-        # One-time capture
+        # One final capture
         self.captured = False
         self.captured_face = None
 
@@ -200,27 +216,26 @@ class AppState:
         self.prediction_finished = False
         self.result = None
 
-        # Detection optimization
-        self.frame_count = 0
-        self.last_detection_time = 0.0
-
-        # Final state
+        # Final
         self.finished = False
         self.error = None
 
 
 if "app_state" not in st.session_state:
+
     st.session_state.app_state = AppState()
+
 
 state = st.session_state.app_state
 
 
 # ============================================================
-# HAAR CASCADE
+# FACE DETECTOR
 # ============================================================
 
-cascade_path = cv2.data.haarcascades + (
-    "haarcascade_frontalface_default.xml"
+cascade_path = (
+    cv2.data.haarcascades
+    + "haarcascade_frontalface_default.xml"
 )
 
 face_cascade = cv2.CascadeClassifier(
@@ -229,10 +244,13 @@ face_cascade = cv2.CascadeClassifier(
 
 
 # ============================================================
-# ONNX MODEL
+# MODEL
 # ============================================================
 
-MODEL_REPO = "onnx-community/age-gender-prediction-ONNX"
+MODEL_REPO = (
+    "onnx-community/age-gender-prediction-ONNX"
+)
+
 MODEL_FILE = "onnx/model.onnx"
 
 
@@ -244,14 +262,16 @@ def load_model():
         filename=MODEL_FILE
     )
 
-    return ort.InferenceSession(
+    session = ort.InferenceSession(
         model_path,
         providers=["CPUExecutionProvider"]
     )
 
+    return session
+
 
 # ============================================================
-# FACE DETECTION
+# FIND FACE
 # ============================================================
 
 def find_face(frame):
@@ -259,7 +279,6 @@ def find_face(frame):
     if frame is None:
         return None
 
-    # Small image = faster detection
     scale = 0.35
 
     small = cv2.resize(
@@ -285,13 +304,11 @@ def find_face(frame):
     if len(faces) == 0:
         return None
 
-    # Largest face
     x, y, w, h = max(
         faces,
         key=lambda r: r[2] * r[3]
     )
 
-    # Convert coordinates to original frame
     x = int(x / scale)
     y = int(y / scale)
     w = int(w / scale)
@@ -304,19 +321,18 @@ def find_face(frame):
 # CHECK FACE INSIDE SQUARE
 # ============================================================
 
-def face_inside_square(
-    box,
+def is_face_inside_square(
+    face_box,
     square
 ):
 
-    if box is None:
+    if face_box is None:
         return False
 
-    x, y, w, h = box
+    x, y, w, h = face_box
 
     sx, sy, sw, sh = square
 
-    # Entire face must be inside square
     return (
         x >= sx
         and
@@ -329,7 +345,7 @@ def face_inside_square(
 
 
 # ============================================================
-# CROP FINAL FACE
+# CROP FACE
 # ============================================================
 
 def crop_face(
@@ -344,24 +360,33 @@ def crop_face(
 
     frame_h, frame_w = frame.shape[:2]
 
-    # Slight margin
-    mx = int(w * 0.20)
-    my = int(h * 0.25)
+    margin_x = int(w * 0.20)
+    margin_y = int(h * 0.25)
 
-    x1 = max(0, x - mx)
-    y1 = max(0, y - my)
+    x1 = max(
+        0,
+        x - margin_x
+    )
+
+    y1 = max(
+        0,
+        y - margin_y
+    )
 
     x2 = min(
         frame_w,
-        x + w + mx
+        x + w + margin_x
     )
 
     y2 = min(
         frame_h,
-        y + h + my
+        y + h + margin_y
     )
 
-    face = frame[y1:y2, x1:x2]
+    face = frame[
+        y1:y2,
+        x1:x2
+    ]
 
     if face.size == 0:
         return None
@@ -370,7 +395,7 @@ def crop_face(
 
 
 # ============================================================
-# MODEL PREPROCESSING
+# PREPROCESS MODEL INPUT
 # ============================================================
 
 def preprocess(face):
@@ -391,7 +416,7 @@ def preprocess(face):
         dtype=np.float32
     )
 
-    image /= 255.0
+    image = image / 255.0
 
     mean = np.array(
         [0.485, 0.456, 0.406],
@@ -430,11 +455,13 @@ def predict_age(face):
 
     model = load_model()
 
-    input_name = model.get_inputs()[0].name
+    input_name = (
+        model.get_inputs()[0].name
+    )
 
     tensor = preprocess(face)
 
-    output = model.run(
+    outputs = model.run(
         None,
         {
             input_name: tensor
@@ -443,7 +470,7 @@ def predict_age(face):
 
     age = float(
         np.asarray(
-            output[0]
+            outputs[0]
         ).reshape(-1)[0]
     )
 
@@ -465,10 +492,9 @@ def video_frame_callback(frame):
     frame_h, frame_w = image.shape[:2]
 
     # ========================================================
-    # SQUARE
+    # ONE SQUARE
     # ========================================================
 
-    # One single square
     square_size = int(
         min(frame_w, frame_h) * 0.62
     )
@@ -489,7 +515,7 @@ def video_frame_callback(frame):
     )
 
     # ========================================================
-    # SAVE LATEST FRAME
+    # STORE LATEST FRAME
     # ========================================================
 
     with state.lock:
@@ -512,42 +538,38 @@ def video_frame_callback(frame):
     # FACE DETECTION
     # ========================================================
 
-    # Do detection only when necessary.
-    # Once countdown starts, we don't need to repeatedly
-    # process/capture frames for age prediction.
+    # Only detect when we are still waiting for the face
+    # or checking whether the face remains inside.
+    #
+    # NO AGE MODEL HERE.
+    #
+    # NO PHOTO CAPTURE HERE.
 
-    if not countdown_started and not captured and not finished:
+    if not captured and not finished:
 
-        # Detect roughly every 10 frames
-        if frame_number % 10 == 0:
+        if frame_number % 8 == 0:
 
-            box = find_face(image)
+            detected_face = find_face(
+                image
+            )
 
-            inside = face_inside_square(
-                box,
+            inside = is_face_inside_square(
+                detected_face,
                 square
             )
 
             with state.lock:
 
-                state.face_box = box
+                state.face_box = detected_face
+
                 state.face_inside = inside
-                state.last_detection_time = now
-
-    else:
-
-        with state.lock:
-
-            box = state.face_box
-            inside = state.face_inside
 
     # ========================================================
-    # READ CURRENT FACE STATE
+    # READ FACE STATUS
     # ========================================================
 
     with state.lock:
 
-        box = state.face_box
         inside = state.face_inside
 
         countdown_started = (
@@ -582,13 +604,41 @@ def video_frame_callback(frame):
 
             state.countdown_start_time = now
 
-            countdown_started = True
+    # ========================================================
+    # IF FACE LEAVES SQUARE → RESET COUNTDOWN
+    # ========================================================
 
-            countdown_start = now
+    elif (
+        not inside
+        and
+        countdown_started
+        and
+        not captured
+        and
+        not finished
+    ):
+
+        with state.lock:
+
+            state.countdown_started = False
+
+            state.countdown_start_time = None
 
     # ========================================================
     # COUNTDOWN
     # ========================================================
+
+    with state.lock:
+
+        countdown_started = (
+            state.countdown_started
+        )
+
+        countdown_start = (
+            state.countdown_start_time
+        )
+
+        captured = state.captured
 
     if (
         countdown_started
@@ -602,20 +652,20 @@ def video_frame_callback(frame):
             now - countdown_start
         )
 
-        remaining = 10.0 - elapsed
+        remaining = (
+            10.0 - elapsed
+        )
 
         # ====================================================
-        # 10 → 1
+        # STILL COUNTING
         # ====================================================
 
         if remaining > 0:
 
-            countdown_number = int(
-                np.ceil(remaining)
-            )
+            pass
 
         # ====================================================
-        # 0
+        # 0 REACHED
         # ====================================================
 
         else:
@@ -628,10 +678,12 @@ def video_frame_callback(frame):
                     state.latest_frame is not None
                     and
                     state.face_box is not None
+                    and
+                    state.face_inside
                 ):
 
                     # ========================================
-                    # ONLY ONE PHOTO AT ZERO
+                    # ONLY ONE FINAL CAPTURE
                     # ========================================
 
                     final_frame = (
@@ -647,36 +699,29 @@ def video_frame_callback(frame):
 
                     if final_face is not None:
 
-                        state.captured_face = final_face
+                        state.captured_face = (
+                            final_face
+                        )
 
                         state.captured = True
 
                         state.countdown_started = False
 
+                        state.countdown_start_time = None
+
     # ========================================================
-    # DRAW VIDEO
+    # DRAW ONLY THE SQUARE
     # ========================================================
 
     display = image.copy()
 
-    # Re-read state
     with state.lock:
 
-        box = state.face_box
         inside = state.face_inside
-        countdown_started = (
-            state.countdown_started
-        )
-        countdown_start = (
-            state.countdown_start_time
-        )
-        captured = state.captured
         finished = state.finished
-        result = state.result
 
-    # ========================================================
-    # SQUARE COLOR
-    # ========================================================
+    # Green if face is inside
+    # Red otherwise
 
     if inside or finished:
 
@@ -694,10 +739,6 @@ def video_frame_callback(frame):
             255
         )
 
-    # ========================================================
-    # DRAW ONLY ONE SQUARE
-    # ========================================================
-
     cv2.rectangle(
         display,
         (
@@ -713,165 +754,11 @@ def video_frame_callback(frame):
     )
 
     # ========================================================
-    # STATUS
-    # ========================================================
-
-    if finished and result:
-
-        status = result
-
-    elif captured:
-
-        status = "PROCESSING..."
-
-    elif countdown_started and countdown_start:
-
-        elapsed = (
-            now - countdown_start
-        )
-
-        remaining = max(
-            0,
-            10.0 - elapsed
-        )
-
-        countdown_number = int(
-            np.ceil(remaining)
-        )
-
-        status = str(
-            countdown_number
-        )
-
-    else:
-
-        status = (
-            "PLEASE KEEP YOUR FACE INSIDE THE SQUARE"
-        )
-
-    # ========================================================
-    # COUNTDOWN NUMBER
-    # ========================================================
-
-    if (
-        countdown_started
-        and
-        not captured
-        and
-        not finished
-    ):
-
-        text = status
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        scale = 2.8
-
-        thickness = 6
-
-        text_size = cv2.getTextSize(
-            text,
-            font,
-            scale,
-            thickness
-        )[0]
-
-        text_x = (
-            frame_w - text_size[0]
-        ) // 2
-
-        text_y = (
-            frame_h + text_size[1]
-        ) // 2
-
-        padding = 30
-
-        cv2.rectangle(
-            display,
-            (
-                text_x - padding,
-                text_y - text_size[1] - padding
-            ),
-            (
-                text_x + text_size[0] + padding,
-                text_y + padding
-            ),
-            (0, 0, 0),
-            -1
-        )
-
-        cv2.putText(
-            display,
-            text,
-            (
-                text_x,
-                text_y
-            ),
-            font,
-            scale,
-            (255, 255, 255),
-            thickness,
-            cv2.LINE_AA
-        )
-
-    else:
-
-        # ====================================================
-        # NORMAL MESSAGE
-        # ====================================================
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        scale = 0.65
-
-        thickness = 2
-
-        text_size = cv2.getTextSize(
-            status,
-            font,
-            scale,
-            thickness
-        )[0]
-
-        text_x = (
-            frame_w - text_size[0]
-        ) // 2
-
-        text_y = frame_h - 30
-
-        padding_x = 18
-        padding_y = 12
-
-        cv2.rectangle(
-            display,
-            (
-                text_x - padding_x,
-                text_y - text_size[1] - padding_y
-            ),
-            (
-                text_x + text_size[0] + padding_x,
-                text_y + padding_y
-            ),
-            (0, 0, 0),
-            -1
-        )
-
-        cv2.putText(
-            display,
-            status,
-            (
-                text_x,
-                text_y
-            ),
-            font,
-            scale,
-            (255, 255, 255),
-            thickness,
-            cv2.LINE_AA
-        )
-
-    # ========================================================
-    # RETURN FRAME
+    # IMPORTANT:
+    #
+    # NO TEXT IS DRAWN INSIDE THE CAMERA.
+    #
+    # Therefore the face remains completely visible.
     # ========================================================
 
     return frame.from_ndarray(
@@ -891,7 +778,7 @@ st.markdown(
 
 
 # ============================================================
-# WEBRTC
+# CAMERA
 # ============================================================
 
 webrtc_streamer(
@@ -927,13 +814,23 @@ webrtc_streamer(
 
 
 # ============================================================
-# PREDICTION
+# STATUS / COUNTDOWN / PREDICTION
 # ============================================================
 
-@st.fragment(run_every=0.25)
-def prediction_worker():
+@st.fragment(run_every=0.15)
+def display_status():
 
     with state.lock:
+
+        inside = state.face_inside
+
+        countdown_started = (
+            state.countdown_started
+        )
+
+        countdown_start = (
+            state.countdown_start_time
+        )
 
         captured = state.captured
 
@@ -945,16 +842,18 @@ def prediction_worker():
             state.prediction_finished
         )
 
+        result = state.result
+
+        finished = state.finished
+
         captured_face = (
             state.captured_face
         )
 
-        result = state.result
-
         error = state.error
 
     # ========================================================
-    # RUN MODEL EXACTLY ONCE
+    # RUN MODEL ONLY AFTER FINAL CAPTURE
     # ========================================================
 
     if (
@@ -973,9 +872,9 @@ def prediction_worker():
 
         try:
 
-            # ================================================
-            # MODEL ONLY RUNS HERE
-            # ================================================
+            # =================================================
+            # MODEL RUNS ONLY ONCE
+            # =================================================
 
             age = predict_age(
                 captured_face
@@ -983,15 +882,19 @@ def prediction_worker():
 
             if age >= 18:
 
-                result = "GREATER THAN 18"
+                final_result = (
+                    "GREATER THAN 18"
+                )
 
             else:
 
-                result = "LESS THAN 18"
+                final_result = (
+                    "LESS THAN 18"
+                )
 
             with state.lock:
 
-                state.result = result
+                state.result = final_result
 
                 state.prediction_finished = True
 
@@ -1008,10 +911,22 @@ def prediction_worker():
                 state.finished = True
 
     # ========================================================
-    # DISPLAY RESULT
+    # READ UPDATED RESULT
     # ========================================================
 
     with state.lock:
+
+        inside = state.face_inside
+
+        countdown_started = (
+            state.countdown_started
+        )
+
+        countdown_start = (
+            state.countdown_start_time
+        )
+
+        captured = state.captured
 
         result = state.result
 
@@ -1019,13 +934,28 @@ def prediction_worker():
 
         error = state.error
 
+    # ========================================================
+    # ERROR
+    # ========================================================
+
     if error:
 
-        st.error(
-            "Unable to analyze the captured face."
+        st.markdown(
+            """
+            <div class="processing">
+                Unable to analyze the face.
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-    elif finished and result:
+        return
+
+    # ========================================================
+    # FINAL RESULT
+    # ========================================================
+
+    if finished and result:
 
         st.markdown(
             f"""
@@ -1036,12 +966,87 @@ def prediction_worker():
             unsafe_allow_html=True
         )
 
-    elif captured:
+        return
+
+    # ========================================================
+    # PROCESSING
+    # ========================================================
+
+    if captured:
 
         st.markdown(
             """
-            <div class="result">
+            <div class="processing">
                 PROCESSING...
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        return
+
+    # ========================================================
+    # COUNTDOWN
+    # ========================================================
+
+    if (
+        countdown_started
+        and
+        countdown_start is not None
+    ):
+
+        elapsed = (
+            time.monotonic()
+            - countdown_start
+        )
+
+        remaining = max(
+            0.0,
+            10.0 - elapsed
+        )
+
+        countdown_number = int(
+            np.ceil(remaining)
+        )
+
+        # Prevent showing 0 here.
+        # At 0 the callback captures the face
+        # and this changes to PROCESSING.
+
+        if countdown_number > 0:
+
+            st.markdown(
+                f"""
+                <div class="countdown">
+                    {countdown_number}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        else:
+
+            st.markdown(
+                """
+                <div class="processing">
+                    PROCESSING...
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        return
+
+    # ========================================================
+    # FACE OUTSIDE SQUARE
+    # ========================================================
+
+    if not inside:
+
+        st.markdown(
+            """
+            <div class="message">
+                PLEASE KEEP YOUR FACE INSIDE THE SQUARE
             </div>
             """,
             unsafe_allow_html=True
@@ -1049,10 +1054,10 @@ def prediction_worker():
 
 
 # ============================================================
-# START PREDICTION WORKER
+# START STATUS LOOP
 # ============================================================
 
-prediction_worker()
+display_status()
 
 
 # ============================================================
