@@ -38,12 +38,10 @@ if os.path.exists(BACKGROUND_PATH):
     st.markdown(
         f"""
         <style>
-
         [data-testid="stAppViewContainer"] {{
             background-image: url(
                 "data:image/png;base64,{background_data}"
             );
-
             background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
@@ -53,11 +51,6 @@ if os.path.exists(BACKGROUND_PATH):
         [data-testid="stHeader"] {{
             background: transparent;
         }}
-
-        .main {{
-            background: transparent;
-        }}
-
         </style>
         """,
         unsafe_allow_html=True
@@ -118,8 +111,19 @@ st.markdown(
         padding: 15px;
         margin-top: 12px;
         border-radius: 10px;
-        font-size: 20px;
+        font-size: 22px;
         font-weight: 800;
+        background: #000000;
+        color: #ffffff;
+    }
+
+    .countdown-box {
+        text-align: center;
+        font-size: 42px;
+        font-weight: 900;
+        margin-top: 12px;
+        padding: 8px;
+        border-radius: 12px;
         background: #000000;
         color: #ffffff;
     }
@@ -153,7 +157,7 @@ st.markdown(
 
 
 # ============================================================
-# INFORMATION CARD
+# INFO CARD
 # ============================================================
 
 st.markdown(
@@ -167,11 +171,11 @@ st.markdown(
         </div>
 
         <div class="info-line">
-            2️⃣ Keep your face steady while the 10-second verification runs.
+            2️⃣ Keep your face steady during the 10-second verification.
         </div>
 
         <div class="info-line">
-            3️⃣ At the end, one face image is captured and analyzed by AI.
+            3️⃣ At 0 seconds, one photo is captured and analyzed by AI.
         </div>
 
     </div>
@@ -181,7 +185,7 @@ st.markdown(
 
 
 # ============================================================
-# GLOBAL RUNTIME STATE
+# RUNTIME STATE
 # ============================================================
 
 class VerificationState:
@@ -190,89 +194,80 @@ class VerificationState:
 
         self.lock = threading.Lock()
 
-        # Face information
+        # ----------------------------
+        # Face
+        # ----------------------------
+
         self.face_box = None
         self.face_valid = False
         self.last_face_time = 0.0
 
+        # ----------------------------
         # Stability
+        # ----------------------------
+
         self.stable_start = None
 
-        # Verification timer
+        # ----------------------------
+        # Countdown
+        # ----------------------------
+
         self.verification_started = False
         self.verification_start_time = None
 
+        # ----------------------------
         # Capture
-        self.capture_requested = False
-        self.captured_face = None
-        self.capture_done = False
+        # ----------------------------
 
+        self.capture_requested = False
+        self.capture_done = False
+        self.captured_face = None
+
+        # ----------------------------
         # Prediction
+        # ----------------------------
+
         self.prediction_started = False
         self.prediction_done = False
         self.prediction_result = None
 
-        # Camera frame
-        self.last_frame = None
+        # ----------------------------
+        # Camera
+        # ----------------------------
 
-        # Detection frame counter
+        self.last_frame = None
         self.frame_counter = 0
 
-        # Final state
-        self.finished = False
+        # ----------------------------
+        # Final
+        # ----------------------------
 
-        # Error
+        self.finished = False
         self.error = None
 
-    def reset(self):
 
-        with self.lock:
+if "verification_state" not in st.session_state:
 
-            self.face_box = None
-            self.face_valid = False
-            self.last_face_time = 0.0
+    st.session_state.verification_state = VerificationState()
 
-            self.stable_start = None
-
-            self.verification_started = False
-            self.verification_start_time = None
-
-            self.capture_requested = False
-            self.captured_face = None
-            self.capture_done = False
-
-            self.prediction_started = False
-            self.prediction_done = False
-            self.prediction_result = None
-
-            self.last_frame = None
-
-            self.frame_counter = 0
-
-            self.finished = False
-
-            self.error = None
-
-
-# One state object for the running Streamlit process.
-if "runtime_state" not in st.session_state:
-
-    st.session_state.runtime_state = VerificationState()
-
-state = st.session_state.runtime_state
+state = st.session_state.verification_state
 
 
 # ============================================================
-# HAAR CASCADE
+# FACE DETECTOR
 # ============================================================
 
-CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+CASCADE_PATH = cv2.data.haarcascades + (
+    "haarcascade_frontalface_default.xml"
+)
 
-face_detector = cv2.CascadeClassifier(CASCADE_PATH)
+face_detector = cv2.CascadeClassifier(
+    CASCADE_PATH
+)
 
 
 # ============================================================
-# MODEL
+# LOAD ONNX MODEL
 # ============================================================
 
 MODEL_REPO = "onnx-community/age-gender-prediction-ONNX"
@@ -301,21 +296,15 @@ def load_model():
 
 def detect_face(frame):
 
-    """
-    Lightweight face detection.
-
-    Detection is performed on a smaller image to reduce CPU usage.
-    """
-
     if frame is None:
         return None
 
     height, width = frame.shape[:2]
 
-    # Smaller detection image = much faster processing
+    # Small image for faster detection
     scale = 0.35
 
-    small = cv2.resize(
+    small_frame = cv2.resize(
         frame,
         None,
         fx=scale,
@@ -324,7 +313,7 @@ def detect_face(frame):
     )
 
     gray = cv2.cvtColor(
-        small,
+        small_frame,
         cv2.COLOR_BGR2GRAY
     )
 
@@ -338,13 +327,13 @@ def detect_face(frame):
     if len(faces) == 0:
         return None
 
-    # Choose largest face
+    # Largest detected face
     x, y, w, h = max(
         faces,
-        key=lambda rect: rect[2] * rect[3]
+        key=lambda r: r[2] * r[3]
     )
 
-    # Convert coordinates back to original frame
+    # Convert back to original frame coordinates
     x = int(x / scale)
     y = int(y / scale)
     w = int(w / scale)
@@ -362,22 +351,24 @@ def is_good_face(frame, box):
     if frame is None or box is None:
         return False
 
-    h, w = frame.shape[:2]
+    frame_h, frame_w = frame.shape[:2]
 
-    x, y, fw, fh = box
+    x, y, w, h = box
 
-    if fw <= 0 or fh <= 0:
+    if w <= 0 or h <= 0:
         return False
 
-    # Face should be reasonably large
-    face_ratio = (fw * fh) / float(w * h)
+    # Face should occupy reasonable portion of frame
+    face_ratio = (w * h) / float(
+        frame_w * frame_h
+    )
 
     if face_ratio < 0.035:
         return False
 
-    # Face should not touch the edges
-    margin_x = int(w * 0.04)
-    margin_y = int(h * 0.04)
+    # Don't allow face touching edges
+    margin_x = int(frame_w * 0.04)
+    margin_y = int(frame_h * 0.04)
 
     if x < margin_x:
         return False
@@ -385,17 +376,17 @@ def is_good_face(frame, box):
     if y < margin_y:
         return False
 
-    if x + fw > w - margin_x:
+    if x + w > frame_w - margin_x:
         return False
 
-    if y + fh > h - margin_y:
+    if y + h > frame_h - margin_y:
         return False
 
     return True
 
 
 # ============================================================
-# CAPTURE FACE CROP
+# CROP FACE
 # ============================================================
 
 def crop_face(frame, box):
@@ -407,22 +398,36 @@ def crop_face(frame, box):
 
     frame_h, frame_w = frame.shape[:2]
 
-    # Add some margin around face
+    # Extra margin around face
     margin_x = int(w * 0.20)
     margin_y = int(h * 0.25)
 
-    x1 = max(0, x - margin_x)
-    y1 = max(0, y - margin_y)
+    x1 = max(
+        0,
+        x - margin_x
+    )
 
-    x2 = min(frame_w, x + w + margin_x)
-    y2 = min(frame_h, y + h + margin_y)
+    y1 = max(
+        0,
+        y - margin_y
+    )
 
-    crop = frame[y1:y2, x1:x2]
+    x2 = min(
+        frame_w,
+        x + w + margin_x
+    )
 
-    if crop.size == 0:
+    y2 = min(
+        frame_h,
+        y + h + margin_y
+    )
+
+    face = frame[y1:y2, x1:x2]
+
+    if face.size == 0:
         return None
 
-    return crop.copy()
+    return face.copy()
 
 
 # ============================================================
@@ -430,10 +435,6 @@ def crop_face(frame, box):
 # ============================================================
 
 def prepare_face(face):
-
-    """
-    Prepare ONE captured face for the ONNX model.
-    """
 
     rgb = cv2.cvtColor(
         face,
@@ -451,10 +452,8 @@ def prepare_face(face):
         dtype=np.float32
     )
 
-    # Normalize to 0-1
     image = image / 255.0
 
-    # ImageNet normalization
     mean = np.array(
         [0.485, 0.456, 0.406],
         dtype=np.float32
@@ -483,7 +482,7 @@ def prepare_face(face):
 
 
 # ============================================================
-# AGE PREDICTION
+# MODEL PREDICTION
 # ============================================================
 
 def predict_age(face):
@@ -501,12 +500,11 @@ def predict_age(face):
         }
     )
 
-    # The model's first output value is the age estimate.
-    age_value = float(
+    age = float(
         np.asarray(outputs[0]).reshape(-1)[0]
     )
 
-    return age_value
+    return age
 
 
 # ============================================================
@@ -515,21 +513,16 @@ def predict_age(face):
 
 def video_frame_callback(frame):
 
-    """
-    IMPORTANT:
-
-    This function must remain lightweight.
-
-    NO ONNX MODEL HERE.
-
-    Face detection only happens every few frames.
-    """
-
+    # Convert incoming frame
     image = frame.to_ndarray(
         format="bgr24"
     )
 
     now = time.monotonic()
+
+    # ========================================================
+    # UPDATE FRAME STATE
+    # ========================================================
 
     with state.lock:
 
@@ -537,21 +530,17 @@ def video_frame_callback(frame):
 
         frame_number = state.frame_counter
 
-        # Keep latest frame
+        # Always keep latest frame.
+        # This is used ONLY for the final single capture.
         state.last_frame = image.copy()
-
-        current_box = state.face_box
-
-        verification_started = state.verification_started
-
-        capture_requested = state.capture_requested
 
     # ========================================================
     # FACE DETECTION
     # ========================================================
 
-    # Detect only every 12 frames.
-    # At ~30 FPS this means roughly 2-3 detections/sec.
+    # Detection is intentionally not done on every frame.
+    # This keeps the actual camera feed smooth.
+
     DETECTION_INTERVAL = 12
 
     if frame_number % DETECTION_INTERVAL == 0:
@@ -577,13 +566,15 @@ def video_frame_callback(frame):
 
     else:
 
-        # Don't immediately declare invalid between detection frames.
-        # This keeps the video smooth.
+        # Keep the last detection briefly between
+        # actual detection frames.
+
         with state.lock:
 
             if (
                 state.last_face_time > 0
-                and now - state.last_face_time < 0.7
+                and
+                now - state.last_face_time < 0.7
             ):
 
                 state.face_valid = True
@@ -593,7 +584,7 @@ def video_frame_callback(frame):
                 state.face_valid = False
 
     # ========================================================
-    # GET CURRENT STATE
+    # READ STATE
     # ========================================================
 
     with state.lock:
@@ -602,14 +593,20 @@ def video_frame_callback(frame):
         valid = state.face_valid
         started = state.verification_started
         start_time = state.verification_start_time
-        capture_requested = state.capture_requested
+        capture_done = state.capture_done
         finished = state.finished
 
     # ========================================================
-    # STABILITY CHECK
+    # START COUNTDOWN
     # ========================================================
 
-    if not started and not finished:
+    if (
+        not started
+        and
+        not finished
+        and
+        not capture_done
+    ):
 
         if valid:
 
@@ -619,48 +616,92 @@ def video_frame_callback(frame):
 
                     state.stable_start = now
 
-                stable_time = now - state.stable_start
+                stable_time = (
+                    now - state.stable_start
+                )
 
-                # Face must stay stable for ~1 sec
+                # Face must remain detected for 1 second
                 if stable_time >= 1.0:
 
+                    # ========================================
+                    # START EXACT 10 SECOND COUNTDOWN
+                    # ========================================
+
                     state.verification_started = True
+
                     state.verification_start_time = now
+
+                    state.capture_requested = False
+
+                    state.capture_done = False
+
+                    state.prediction_started = False
+
+                    state.prediction_done = False
+
+                    state.prediction_result = None
 
         else:
 
             with state.lock:
+
                 state.stable_start = None
 
     # ========================================================
-    # 10 SECOND TIMER
+    # 10 → 0 COUNTDOWN
     # ========================================================
 
     with state.lock:
 
         started = state.verification_started
         start_time = state.verification_start_time
+        capture_done = state.capture_done
+        current_valid = state.face_valid
+        current_box = state.face_box
 
-    if started and start_time is not None:
+    if (
+        started
+        and
+        start_time is not None
+        and
+        not capture_done
+    ):
 
         elapsed = now - start_time
 
-        # Exactly 10 seconds
-        if elapsed >= 10.0:
+        remaining = 10.0 - elapsed
+
+        # ====================================================
+        # COUNTDOWN: 10, 9, 8 ... 1
+        # ====================================================
+
+        if remaining > 0:
+
+            countdown_number = int(
+                np.ceil(remaining)
+            )
+
+        # ====================================================
+        # ZERO REACHED
+        # ====================================================
+
+        else:
 
             with state.lock:
 
+                # =================================================
+                # EXACTLY ONE CAPTURE
+                # =================================================
+
                 if (
                     not state.capture_done
-                    and not state.capture_requested
-                    and state.face_valid
-                    and state.last_frame is not None
-                    and state.face_box is not None
+                    and
+                    state.last_frame is not None
+                    and
+                    state.face_box is not None
+                    and
+                    state.face_valid
                 ):
-
-                    # =================================================
-                    # ONE AND ONLY ONE CAPTURE
-                    # =================================================
 
                     captured = crop_face(
                         state.last_frame,
@@ -669,15 +710,23 @@ def video_frame_callback(frame):
 
                     if captured is not None:
 
+                        # Save ONE face image in memory
                         state.captured_face = captured
+
+                        # Tell prediction worker
                         state.capture_requested = True
+
+                        # Never capture again
                         state.capture_done = True
 
+
     # ========================================================
-    # DRAW UI
+    # DRAW VIDEO
     # ========================================================
 
     display = image.copy()
+
+    frame_h, frame_w = display.shape[:2]
 
     with state.lock:
 
@@ -687,43 +736,69 @@ def video_frame_callback(frame):
         start_time = state.verification_start_time
         capture_requested = state.capture_requested
         finished = state.finished
-        prediction_done = state.prediction_done
+        prediction_result = state.prediction_result
 
-    # --------------------------------------------------------
+    # ========================================================
     # GUIDE BOX
-    # --------------------------------------------------------
+    # ========================================================
 
-    frame_h, frame_w = display.shape[:2]
+    guide_width = int(
+        frame_w * 0.52
+    )
 
-    guide_w = int(frame_w * 0.52)
-    guide_h = int(frame_h * 0.70)
+    guide_height = int(
+        frame_h * 0.70
+    )
 
-    guide_x = (frame_w - guide_w) // 2
-    guide_y = (frame_h - guide_h) // 2
+    guide_x = (
+        frame_w - guide_width
+    ) // 2
+
+    guide_y = (
+        frame_h - guide_height
+    ) // 2
 
     if finished:
 
-        guide_color = (0, 255, 0)
+        guide_color = (
+            0,
+            255,
+            0
+        )
 
     elif valid:
 
-        guide_color = (0, 255, 0)
+        guide_color = (
+            0,
+            255,
+            0
+        )
 
     else:
 
-        guide_color = (0, 0, 255)
+        guide_color = (
+            0,
+            0,
+            255
+        )
 
     cv2.rectangle(
         display,
-        (guide_x, guide_y),
-        (guide_x + guide_w, guide_y + guide_h),
+        (
+            guide_x,
+            guide_y
+        ),
+        (
+            guide_x + guide_width,
+            guide_y + guide_height
+        ),
         guide_color,
         3
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # FACE BOX
-    # --------------------------------------------------------
+    # ========================================================
 
     if box is not None:
 
@@ -731,30 +806,27 @@ def video_frame_callback(frame):
 
         cv2.rectangle(
             display,
-            (x, y),
-            (x + w, y + h),
+            (
+                x,
+                y
+            ),
+            (
+                x + w,
+                y + h
+            ),
             guide_color,
             2
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # STATUS
-    # --------------------------------------------------------
-
-    status_text = ""
+    # ========================================================
 
     if finished:
 
-        with state.lock:
-            result = state.prediction_result
+        if prediction_result:
 
-        if result == "GREATER THAN 18":
-
-            status_text = "GREATER THAN 18"
-
-        elif result == "LESS THAN 18":
-
-            status_text = "LESS THAN 18"
+            status_text = prediction_result
 
         else:
 
@@ -773,8 +845,16 @@ def video_frame_callback(frame):
             10.0 - elapsed
         )
 
-        status_text = (
-            f"KEEP YOUR FACE IN FRAME • {remaining:.1f}s"
+        # ----------------------------------------------------
+        # Reverse countdown
+        # ----------------------------------------------------
+
+        countdown_number = int(
+            np.ceil(remaining)
+        )
+
+        status_text = str(
+            countdown_number
         )
 
     elif valid:
@@ -783,72 +863,140 @@ def video_frame_callback(frame):
 
     else:
 
-        status_text = "POSITION YOUR FACE INSIDE THE BOX"
+        status_text = (
+            "POSITION YOUR FACE INSIDE THE BOX"
+        )
 
-    # --------------------------------------------------------
-    # BLACK STATUS BOX
-    # --------------------------------------------------------
+    # ========================================================
+    # COUNTDOWN / STATUS DISPLAY
+    # ========================================================
 
     font = cv2.FONT_HERSHEY_SIMPLEX
 
-    font_scale = 0.75
-    thickness = 2
+    # Large countdown
+    if (
+        started
+        and
+        not capture_requested
+        and
+        not finished
+    ):
 
-    text_size = cv2.getTextSize(
-        status_text,
-        font,
-        font_scale,
-        thickness
-    )[0]
+        text_size = cv2.getTextSize(
+            status_text,
+            font,
+            2.2,
+            5
+        )[0]
 
-    text_x = int(
-        (frame_w - text_size[0]) / 2
-    )
+        text_x = (
+            frame_w - text_size[0]
+        ) // 2
 
-    text_y = frame_h - 35
+        text_y = (
+            frame_h + text_size[1]
+        ) // 2
 
-    # Black rectangle
-    box_padding_x = 20
-    box_padding_y = 12
+        # Black background
+        padding = 30
 
-    rect_x1 = max(
-        10,
-        text_x - box_padding_x
-    )
+        cv2.rectangle(
+            display,
+            (
+                text_x - padding,
+                text_y - text_size[1] - padding
+            ),
+            (
+                text_x + text_size[0] + padding,
+                text_y + padding
+            ),
+            (0, 0, 0),
+            -1
+        )
 
-    rect_y1 = max(
-        10,
-        text_y - text_size[1] - box_padding_y
-    )
+        cv2.putText(
+            display,
+            status_text,
+            (
+                text_x,
+                text_y
+            ),
+            font,
+            2.2,
+            (255, 255, 255),
+            5,
+            cv2.LINE_AA
+        )
 
-    rect_x2 = min(
-        frame_w - 10,
-        text_x + text_size[0] + box_padding_x
-    )
+    else:
 
-    rect_y2 = min(
-        frame_h - 10,
-        text_y + box_padding_y
-    )
+        # Normal status box
+        font_scale = 0.70
+        thickness = 2
 
-    cv2.rectangle(
-        display,
-        (rect_x1, rect_y1),
-        (rect_x2, rect_y2),
-        (0, 0, 0),
-        -1
-    )
+        text_size = cv2.getTextSize(
+            status_text,
+            font,
+            font_scale,
+            thickness
+        )[0]
 
-    cv2.putText(
-        display,
-        status_text,
-        (text_x, text_y),
-        font,
-        font_scale,
-        (255, 255, 255),
-        thickness,
-        cv2.LINE_AA
-    )
+        text_x = (
+            frame_w - text_size[0]
+        ) // 2
+
+        text_y = frame_h - 35
+
+        padding_x = 20
+        padding_y = 12
+
+        rect_x1 = max(
+            10,
+            text_x - padding_x
+        )
+
+        rect_y1 = max(
+            10,
+            text_y - text_size[1] - padding_y
+        )
+
+        rect_x2 = min(
+            frame_w - 10,
+            text_x + text_size[0] + padding_x
+        )
+
+        rect_y2 = min(
+            frame_h - 10,
+            text_y + padding_y
+        )
+
+        cv2.rectangle(
+            display,
+            (
+                rect_x1,
+                rect_y1
+            ),
+            (
+                rect_x2,
+                rect_y2
+            ),
+            (0, 0, 0),
+            -1
+        )
+
+        cv2.putText(
+            display,
+            status_text,
+            (
+                text_x,
+                text_y
+            ),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA
+        )
 
     # ========================================================
     # RETURN FRAME
@@ -861,7 +1009,7 @@ def video_frame_callback(frame):
 
 
 # ============================================================
-# CAMERA
+# CAMERA TITLE
 # ============================================================
 
 st.markdown(
@@ -870,27 +1018,45 @@ st.markdown(
 )
 
 
+# ============================================================
+# WEBRTC CAMERA
+# ============================================================
+
 ctx = webrtc_streamer(
+
+    # IMPORTANT:
+    # Fixed key prevents unnecessary component recreation.
     key="age-verification-camera",
 
     mode=WebRtcMode.SENDRECV,
 
+    # ========================================================
+    # STUN
+    # ========================================================
+
     rtc_configuration={
         "iceServers": [
+
             {
                 "urls": [
                     "stun:stun.l.google.com:19302",
                     "stun:stun1.l.google.com:19302"
                 ]
             }
+
         ]
     },
+
+    # ========================================================
+    # CAMERA SETTINGS
+    # ========================================================
 
     media_stream_constraints={
         "video": True,
         "audio": False
     },
 
+    # Keep video processing asynchronous
     async_processing=True,
 
     video_frame_callback=video_frame_callback
@@ -906,39 +1072,61 @@ def prediction_worker():
 
     with state.lock:
 
-        capture_requested = state.capture_requested
-        prediction_started = state.prediction_started
-        prediction_done = state.prediction_done
-        captured_face = state.captured_face
+        capture_requested = (
+            state.capture_requested
+        )
+
+        prediction_started = (
+            state.prediction_started
+        )
+
+        prediction_done = (
+            state.prediction_done
+        )
+
+        captured_face = (
+            state.captured_face
+        )
+
         finished = state.finished
+
+        result = state.prediction_result
+
         error = state.error
 
     # ========================================================
-    # RUN ONLY ONCE AFTER 10 SECONDS
+    # MODEL RUNS ONLY AFTER ONE CAPTURE
     # ========================================================
 
     if (
         capture_requested
-        and not prediction_started
-        and not prediction_done
-        and captured_face is not None
+        and
+        not prediction_started
+        and
+        not prediction_done
+        and
+        captured_face is not None
     ):
 
         with state.lock:
 
+            # Prevent another prediction
             state.prediction_started = True
 
         try:
 
-            # ================================================
-            # ONLY NOW RUN THE AI MODEL
-            # ================================================
+            # =================================================
+            # MODEL RUNS HERE — NOT IN VIDEO CALLBACK
+            # =================================================
 
             age = predict_age(
                 captured_face
             )
 
-            # >= 18 means greater than 18 category
+            # =================================================
+            # RESULT
+            # =================================================
+
             if age >= 18:
 
                 result = "GREATER THAN 18"
@@ -950,7 +1138,9 @@ def prediction_worker():
             with state.lock:
 
                 state.prediction_result = result
+
                 state.prediction_done = True
+
                 state.finished = True
 
         except Exception as e:
@@ -958,18 +1148,26 @@ def prediction_worker():
             with state.lock:
 
                 state.error = str(e)
+
                 state.prediction_done = True
+
                 state.finished = True
 
     # ========================================================
-    # DISPLAY RESULT
+    # READ FINAL STATE
     # ========================================================
 
     with state.lock:
 
         result = state.prediction_result
+
         finished = state.finished
+
         error = state.error
+
+    # ========================================================
+    # DISPLAY RESULT BELOW CAMERA
+    # ========================================================
 
     if error:
 
@@ -979,50 +1177,29 @@ def prediction_worker():
 
     elif finished and result:
 
-        if result == "GREATER THAN 18":
+        st.markdown(
+            f"""
+            <div class="status-box">
+                {result}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-            st.markdown(
-                """
-                <div class="status-box">
-                    GREATER THAN 18
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    elif capture_requested:
 
-        elif result == "LESS THAN 18":
-
-            st.markdown(
-                """
-                <div class="status-box">
-                    LESS THAN 18
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    else:
-
-        # Status outside the camera
-        with state.lock:
-
-            started = state.verification_started
-            capture_requested = state.capture_requested
-
-        if capture_requested:
-
-            st.markdown(
-                """
-                <div class="status-box">
-                    PROCESSING...
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+        st.markdown(
+            """
+            <div class="status-box">
+                PROCESSING...
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 
 # ============================================================
-# RUN PREDICTION WORKER
+# START PREDICTION WORKER
 # ============================================================
 
 prediction_worker()
